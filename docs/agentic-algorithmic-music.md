@@ -187,6 +187,18 @@ class AgenticMarkovSampler:
             raw_probs *= mask
         
         # Apply temperature
+        #
+        # Note (math review Aug 2026): This is NOT standard temperature scaling.
+        # Standard temperature scaling operates on logits (unnormalized scores):
+        #   p_i(T) ∝ exp(z_i / T)
+        # Here, we take already-normalized probabilities, apply log, divide by T,
+        # and re-softmax. This is equivalent to the escort distribution
+        #   p_i(T) ∝ p_i^{1/T}
+        # only approximately — the softmax-of-log approach has different numerical
+        # properties at extremes. The knob still controls randomness vs. determinism,
+        # but the semantics differ from standard temperature. For the proper
+        # information-theoretic generalization, see Beck & Schlögl (1993),
+        # *Thermodynamics of Chaotic Systems* (escort distributions).
         logits = np.log(raw_probs + 1e-8) / self.params.temperature
         probs = softmax(logits)
         
