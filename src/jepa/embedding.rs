@@ -7,15 +7,17 @@ use crate::midi::Bar;
 
 /// The embedding dimension for the initial feature-based encoder.
 ///
-/// Set to 64 as a compromise: small enough for RTX 4050 real-time inference,
-/// large enough for meaningful musical features beyond the 16 hand-crafted ones.
-/// The projection layer (`ProjectionLayer`) maps the 16 raw features up to 64-dim.
-pub const EMBEDDING_DIM: usize = 64;
+/// Set to 256 to match fleet-ensemble's `EMBEDDING_DIM`.
+/// The projection layer (`ProjectionLayer`) maps the 16 raw features up to 256-dim
+/// via a fixed random projection (Johnson-Lindenstrauss-style).
+/// In v2+ this will be replaced by a trained Conformer encoder (384-dim),
+/// with a corresponding projection to align with fleet-ensemble.
+pub const EMBEDDING_DIM: usize = 256;
 
 /// The number of raw hand-crafted features extracted per bar.
 pub const RAW_FEATURE_DIM: usize = 16;
 
-/// A 64-dimensional bar embedding (projected from 16 raw features).
+/// A 256-dimensional bar embedding (projected from 16 raw features).
 pub type Embedding = [f32; EMBEDDING_DIM];
 
 /// Raw 16-dimensional feature vector (pre-projection).
@@ -85,7 +87,7 @@ impl BarFeatures {
         ]
     }
 
-    /// Convert to a flat embedding array (16-dim, for backward compat).
+    /// Convert to a flat raw feature array (16-dim, for backward compat).
     /// Deprecated: use `to_raw()` + `ProjectionLayer` instead.
     pub fn to_array(&self) -> RawFeatures {
         self.to_raw()
@@ -117,7 +119,7 @@ impl BarFeatures {
 }
 
 /// The JEPA encoder. In v1 this is a deterministic feature extractor
-/// with a linear projection from 16 raw features to 64-dim embedding space.
+/// with a linear projection from 16 raw features to 256-dim embedding space.
 /// In v2+ it will be a frozen Conformer transformer (384-dim).
 pub struct JepaEncoder {
     /// Smoothing factor for exponential moving average (0-1).
@@ -125,9 +127,8 @@ pub struct JepaEncoder {
     pub smoothing_alpha: f32,
     /// Previous smoothed embedding (for temporal smoothing).
     prev_embedding: Option<Embedding>,
-    /// Projection layer: maps 16 raw features → 64-dim embedding.
+    /// Projection layer: maps 16 raw features → 256-dim embedding.
     projection: ProjectionLayer,
-}
 }
 
 impl JepaEncoder {
@@ -171,7 +172,7 @@ impl JepaEncoder {
     }
 }
 
-/// Linear projection layer: maps 16 raw features → 64-dim embedding.
+/// Linear projection layer: maps 16 raw features → 256-dim embedding.
 ///
 /// This is a simple fixed random projection (Johnson-Lindenstrauss-style).
 /// The projection matrix is deterministic (seeded) so all instances produce
@@ -179,10 +180,10 @@ impl JepaEncoder {
 ///
 /// In v2+ this will be replaced by the first layers of a trained Conformer.
 pub struct ProjectionLayer {
-    /// Projection matrix: [EMBEDDING_DIM × RAW_FEATURE_DIM] (64×16).
+    /// Projection matrix: [EMBEDDING_DIM × RAW_FEATURE_DIM] (256×16).
     /// Each output dimension is a weighted combination of the 16 raw features.
     weights: [[f32; RAW_FEATURE_DIM]; EMBEDDING_DIM],
-    /// Bias vector (64-dim).
+    /// Bias vector (256-dim).
     bias: [f32; EMBEDDING_DIM],
 }
 
@@ -214,7 +215,7 @@ impl ProjectionLayer {
         Self { weights, bias }
     }
 
-    /// Project a 16-dim raw feature vector to 64-dim embedding space.
+    /// Project a 16-dim raw feature vector to 256-dim embedding space.
     ///
     /// `out[i] = bias[i] + Σ_j weights[i][j] * raw[j]`
     pub fn project(&self, raw: &RawFeatures) -> Embedding {
@@ -513,7 +514,7 @@ mod tests {
 
     #[test]
     fn test_embedding_dimension() {
-        assert_eq!(EMBEDDING_DIM, 64);
+        assert_eq!(EMBEDDING_DIM, 256);
         assert_eq!(RAW_FEATURE_DIM, 16);
     }
 

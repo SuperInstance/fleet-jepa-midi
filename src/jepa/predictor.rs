@@ -8,13 +8,12 @@ use super::embedding::{Embedding, EMBEDDING_DIM};
 /// A simple linear predictor for next-bar embedding.
 ///
 /// Predicts: emb_{t+1} = W @ emb_t + b
-/// where W is a EMBEDDING_DIM × EMBEDDING_DIM matrix (64×64).
+/// where W is a EMBEDDING_DIM × EMBEDDING_DIM matrix (256×256).
 pub struct LinearPredictor {
     /// Weight matrix (row-major, EMBEDDING_DIM × EMBEDDING_DIM).
     weights: Box<[[f32; EMBEDDING_DIM]; EMBEDDING_DIM]>,
     /// Bias vector.
     bias: [f32; EMBEDDING_DIM],
-}
 }
 
 impl LinearPredictor {
@@ -28,7 +27,6 @@ impl LinearPredictor {
             weights,
             bias: [0.0; EMBEDDING_DIM],
         }
-    }
     }
 
     /// Predict the next-bar embedding from the current embedding.
@@ -44,13 +42,12 @@ impl LinearPredictor {
         out
     }
 
-    /// Compute L2 prediction error between a prediction and actual embedding.
+    /// Compute cosine prediction error between a prediction and actual embedding.
+    ///
+    /// Returns cosine distance: 0 = identical direction, 1 = orthogonal, 2 = opposite.
+    /// This aligns with fleet-ensemble's `cosine_distance` metric.
     pub fn prediction_error(predicted: &Embedding, actual: &Embedding) -> f32 {
-        predicted.iter()
-            .zip(actual.iter())
-            .map(|(p, a)| (p - a).powi(2))
-            .sum::<f32>()
-            .sqrt()
+        cosine_distance(predicted, actual)
     }
 
     /// Update weights using a simple gradient step.
@@ -72,6 +69,23 @@ impl LinearPredictor {
     pub fn weights(&self) -> &[[f32; EMBEDDING_DIM]; EMBEDDING_DIM] {
         &self.weights
     }
+}
+
+/// Cosine distance between two embedding vectors: 0 = identical, 1 = orthogonal.
+///
+/// Consistent with fleet-ensemble's `cosine_distance` function.
+#[inline]
+fn cosine_distance(a: &Embedding, b: &Embedding) -> f32 {
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for i in 0..EMBEDDING_DIM {
+        dot += a[i] * b[i];
+        norm_a += a[i] * a[i];
+        norm_b += b[i] * b[i];
+    }
+    let denom = (norm_a.sqrt() * norm_b.sqrt()).max(1e-10);
+    1.0 - (dot / denom)
 }
 
 impl Default for LinearPredictor {
@@ -99,7 +113,12 @@ mod tests {
     fn test_prediction_error_zero() {
         let a = [0.3, 0.7, 0.5, 0.1, 0.9, 0.4, 0.6, 0.2,
                  0.8, 0.55, 0.45, 0.35, 0.65, 0.25, 0.75, 0.15];
-        assert_eq!(LinearPredictor::prediction_error(&a, &a), 0.0);
+        // Pad to full EMBEDDING_DIM
+        let mut a_full = [0.0f32; EMBEDDING_DIM];
+        a_full[..16].copy_from_slice(&a);
+        // Cosine distance of a vector with itself = 0 (within float epsilon)
+        let err = LinearPredictor::prediction_error(&a_full, &a_full);
+        assert!(err.abs() < 1e-5, "expected ~0, got {err}");
     }
 
     #[test]
@@ -107,18 +126,36 @@ mod tests {
         let a = [1.0; EMBEDDING_DIM];
         let b = [0.0; EMBEDDING_DIM];
         let err = LinearPredictor::prediction_error(&a, &b);
-        // L2 norm of [1.0; 16] - [0.0; 16] = sqrt(16) = 4
-        assert_approx_eq::assert_approx_eq!(err, 4.0, 0.001);
+        // Cosine distance of [1.0; N] and [0.0; N]: zero vector has zero norm,
+        // denom clamped to 1e-10, so distance = 1.0 - 0.0/N = 1.0
+        assert_approx_eq::assert_approx_eq!(err, 1.0, 0.001);
+    }
+
+    #[test]
+    fn test_prediction_error_orthogonal() {
+        let mut a = [0.0f32; EMBEDDING_DIM];
+        let mut b = [0.0f32; EMBEDDING_DIM];
+        a[0] = 1.0;
+        b[1] = 1.0;
+        let err = LinearPredictor::prediction_error(&a, &b);
+        // Orthogonal vectors: cosine distance = 1.0
+        assert_approx_eq::assert_approx_eq!(err, 1.0, 1e-5);
     }
 
     #[test]
     fn test_online_update_reduces_error() {
         let mut predictor = LinearPredictor::new();
-        let current = [0.5; EMBEDDING_DIM];
-        let actual = [0.8; EMBEDDING_DIM];
+        // Use vectors with different directions so cosine distance is non-zero
+        let mut current = [0.0f32; EMBEDDING_DIM];
+        let mut actual = [0.0f32; EMBEDDING_DIM];
+        current[0] = 1.0;
+        current[1] = 0.5;
+        actual[0] = 0.5;
+        actual[1] = 1.0;
 
         let predicted_before = predictor.predict(&current);
         let err_before = LinearPredictor::prediction_error(&predicted_before, &actual);
+        assert!(err_before > 0.0, "setup should have non-zero initial error");
 
         // Train for 100 steps
         for _ in 0..100 {
@@ -129,6 +166,6 @@ mod tests {
         let predicted_after = predictor.predict(&current);
         let err_after = LinearPredictor::prediction_error(&predicted_after, &actual);
 
-        assert!(err_after < err_before, "error should decrease after training");
+        assert!(err_after < err_before, "error should decrease after training: before={err_before}, after={err_after}");
     }
 }

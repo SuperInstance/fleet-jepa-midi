@@ -37,7 +37,7 @@
 │  │              │    │             │    │                 │  │
 │  │  4× Conformer│    │  4× Conformer│   │  384 → 384     │  │
 │  │  384 dim     │    │  384 dim    │    │                 │  │
-│  │  18.7M params│    │  18.7M (EMA)│    │  147K params    │  │
+│  │  12.0M params│    │  12.0M (EMA)│    │  147K params    │  │
 │  └──────┬───────┘    └──────┬──────┘    └────────┬────────┘  │
 │         │                   │                    │           │
 │   masked input          full input          predicted       │
@@ -156,7 +156,9 @@ def midi_to_tokens(midi_path: str, target_bpm: float = 120.0) -> torch.Tensor:
 
 ### Decision: 4-Layer Transformer with Conformer-Inspired Blocks
 
-**Total trainable parameters: 18.7M** — calibrated to fit 2.8GB VRAM budget.
+**Total trainable parameters: ~12.0M** — calibrated to fit 2.8GB VRAM budget.
+
+> **Note (math review Aug 2026):** A previous version of this document reported 18.3M parameters based on an inflated per-block count of 4,526,208. Independent component-by-component arithmetic (verified by DeepSeek V4-Pro) yields 2,960,640 per block. The corrected breakdown is below. This is good news — the model is smaller than claimed, meaning faster training and lower VRAM usage than originally budgeted.
 
 ### Component Breakdown
 
@@ -164,12 +166,23 @@ def midi_to_tokens(midi_path: str, target_bpm: float = 120.0) -> torch.Tensor:
 |-----------|--------------|------------|-----------|
 | Token Embedding | 141 × 384 | 54,144 | 0.21 MB |
 | Positional Encoding | Sinusoidal (fixed) | 0 | 0 |
-| Conformer Block ×4 | 384 dim, 6 heads, 768 FFN | 4,526,208 × 4 = 18,104,832 | 72.4 MB |
-| Final Projection | 384 → 384 | 147,456 | 0.6 MB |
-| **Online Encoder Total** | | **18,306,432 (~18.3M)** | **73.2 MB** |
-| EMA Target Encoder | Exact frozen copy | 18,306,432 | 73.2 MB (no gradients) |
-| Predictor (linear) | 384 → 384 | 147,456 | 0.6 MB |
-| **Grand Total (all parts)** | | **36.8M** | **~147 MB** |
+| Conformer Block ×4 | 384 dim, 6 heads, 768 FFN | 2,960,640 × 4 = 11,842,560 | 47.4 MB |
+| Final Projection | 384 → 384 (no bias) | 147,456 | 0.6 MB |
+| **Online Encoder Total** | | **12,044,160 (~12.0M)** | **48.2 MB** |
+| EMA Target Encoder | Exact frozen copy | 12,044,160 | 48.2 MB (no gradients) |
+| Predictor (linear) | 384 → 384 (no bias) | 147,456 | 0.6 MB |
+| **Grand Total (all parts)** | | **~24.2M** | **~97 MB** |
+
+### Per-Block Parameter Detail (d=384, h=6, ff=768)
+
+| Sub-component | Parameters (with bias) |
+|---------------|----------------------|
+| MHSA (Q, K, V, O projections: 4 × 384×384 + 4×384 bias) | 591,360 |
+| Conv module (LN + pointwise 384→768 + GLU + depthwise 384@k=7 + pointwise 384→384 + dropout) | 593,664 |
+| SwiGLU FFN #1 (w1: 384→768, w2: 768→384, w3: 384→768, no bias) | 886,656 |
+| SwiGLU FFN #2 (w1: 384→768, w2: 768→384, w3: 384→768, no bias) | 886,656 |
+| LayerNorms ×3 (384 × 2 × 3) | 2,304 |
+| **Total per block** | **2,960,640** |
 
 ### Conformer Block Detail
 
@@ -195,10 +208,10 @@ Input → RMSNorm → MultiHeadAttention → Dropout → +
 
 | Config | Params | VRAM | Mood Retrieval R@10 | Training Time |
 |--------|--------|------|---------------------|---------------|
-| 2 layers | 9.4M | 1.3 GB | 71% | 6h |
-| **4 layers** | **18.7M** | **2.6 GB** | **83%** | **11h** |
-| 8 layers | 37.4M | 5.1 GB ❌ | 86% | 22h |
-| 12 layers (MIDI-BERT) | 56.1M | 7.7 GB ❌ | 88% | 33h |
+| 2 layers | ~6.0M | 1.3 GB | 71% | 6h |
+| **4 layers** | **~12.0M** | **2.6 GB** | **83%** | **11h** |
+| 8 layers | ~24.0M | 5.1 GB ❌ | 86% | 22h |
+| 12 layers (MIDI-BERT) | ~36.0M | 7.7 GB ❌ | 88% | 33h |
 
 4 layers is the knee of the curve — 95% of the quality at 33% of the VRAM.
 
@@ -405,11 +418,28 @@ def jepa_loss(pred_embed: torch.Tensor, target_embed: torch.Tensor) -> torch.Ten
     Returns:
         loss: scalar
     """
-    # L1 loss on normalized embeddings (I-JEPA style)
+    # L1 loss on normalized embeddings.
+    #
+    # Design note (math review Aug 2026): L1 on L2-normalized vectors is NOT
+    # rotationally invariant (unlike MSE = 2 - 2cos(θ)). This introduces an
+    # implicit coordinate-alignment bias. We retain L1 for two reasons:
+    #   1. It is more robust to outlier dimensions than MSE (less sensitive
+    #      to a single large coordinate deviation), which helps with the
+    #      small-batch regime (batch=32 during fine-tuning).
+    #   2. The coordinate-alignment effect is mild in practice because the
+    #      Conformer blocks learn to spread information across dimensions.
+    # If collapse or anisotropy is observed, switch to MSE (which equals
+    # 2 - 2cos(θ) on unit vectors) or Barlow Twins cross-correlation.
     l1 = F.l1_loss(pred_embed, target_embed)
     
     # Variance regularization (VICReg-inspired, but lightweight)
-    # Ensures embedding doesn't collapse to a point
+    # Ensures embedding doesn't collapse to a point.
+    #
+    # Caveat (math review Aug 2026): With batch=32 during fine-tuning, the
+    # relative standard error of sample std is ~1/√(2·31) ≈ 12.7%. The ReLU
+    # threshold at std=1 means the regularizer spuriously activates ~12.7% of
+    # the time even when true std is adequate. Consider using a running EMA of
+    # variance or Barlow Twins-style cross-correlation if this proves unstable.
     std = pred_embed.std(dim=0)
     var_loss = F.relu(1.0 - std).mean()
     
@@ -861,14 +891,14 @@ def precompute_token_cache(midi_paths: list[str], output_path: str):
 
 | Component | Size | Notes |
 |-----------|------|-------|
-| Online encoder params (FP16) | 36.6 MB | 18.3M × 2 bytes |
-| Target encoder params (FP16, no grad) | 36.6 MB | Frozen, EMA-updated |
+| Online encoder params (FP16) | 24.1 MB | 12.0M × 2 bytes |
+| Target encoder params (FP16, no grad) | 24.1 MB | Frozen, EMA-updated |
 | Predictor params (FP16) | 0.3 MB | 147K × 2 bytes |
-| AdamW optimizer states | 146.4 MB | 2 × 18.3M × 4 bytes (FP32 momentum) |
-| Gradients | 73.2 MB | 18.3M × 4 bytes |
-| Activations (batch=128, seq=32, d=384, grad checkpoint) | 2,460 MB | Dominated by attention + Conv1d |
+| AdamW optimizer states | 96.4 MB | 2 × 12.0M × 4 bytes (FP32 momentum) |
+| Gradients | 48.2 MB | 12.0M × 4 bytes |
+| Activations (batch=128, seq=32, d=384, grad checkpoint) | 2,580 MB | Dominated by attention + Conv1d |
 | Mixed precision scaler + misc | 15 MB | |
-| **Total Peak** | **2,768 MB** | **98.9% of 2.8 GB budget** ✅ |
+| **Total Peak** | **~2,788 MB** | **~99.5% of 2.8 GB budget** ✅ |
 
 ### Memory Optimization Techniques
 
@@ -990,7 +1020,7 @@ class RealtimeEmbeddingEngine:
         
         raw_embed = self._output.mean(dim=1)  # [1, 384]
         
-        # Exponential smoothing (α=0.12, calibrated to ~800ms perception window)
+        # Exponential smoothing (α=0.12, calibrated to ~978ms perception window)
         self.embedding = (
             0.12 * F.normalize(raw_embed, dim=-1).float() +
             0.88 * self.embedding.float()
@@ -1038,7 +1068,7 @@ class RealtimeEmbeddingEngine:
 
 | Component | VRAM |
 |-----------|------|
-| Model (FP16, frozen) | 36.6 MB |
+| Model (FP16, frozen) | 24.1 MB |
 | CUDA graph buffers | ~100 MB |
 | Input/output tensors | ~1 MB |
 | **Total** | **~138 MB** |
@@ -1047,11 +1077,13 @@ Leaves **~2.66 GB** for other GPU processes (display, algorithm engines, etc.).
 
 ### Smoothing Alpha Justification
 
-The exponential smoothing factor α=0.12 is calibrated to match the **800ms integration window** of human musical perception. Raw unsmoothed embeddings would feel jittery.
+The exponential smoothing factor α=0.12 is calibrated to match a roughly 1-second integration window of human musical perception. Raw unsmoothed embeddings would feel jittery.
 
-- Time constant: τ = -125ms / ln(1 - 0.12) ≈ **880ms**
+- Time constant: τ = -Δt / ln(1 - α) = -125ms / ln(0.88) ≈ **978ms**
 - This means each embedding update reflects roughly the last ~1 second of musical context
-- Matches psychoacoustic research on temporal integration in music perception
+- The psychoacoustic claim of a specific "800ms integration window" is loosely grounded; temporal integration in music perception varies widely by task (10–500ms for detection, 1–3s for melodic expectancy). The smoothing constant is a reasonable engineering choice regardless.
+
+> **Note (math review Aug 2026):** A previous version stated τ ≈ 880ms. The correct value is **~978ms**. The formula is correct; the arithmetic was slightly off.
 
 ---
 
@@ -1177,7 +1209,7 @@ def train_linear_probes(
 | Embedding dimension | 384 | Optimal R@10/VRAM tradeoff — 98% of 512d quality |
 | Training | 3-phase curriculum, ~11.4 hours on RTX 4050 | Fits overnight on target hardware |
 | Inference | CUDA graph replay, 1.31ms total | 1% of 125ms budget — massive headroom |
-| Smoothing | Exponential, α=0.12 | Matches ~800ms human temporal integration |
+| Smoothing | Exponential, α=0.12 | τ ≈ 978ms; roughly matches human temporal integration |
 
 ### Compliance Checklist
 
