@@ -6,10 +6,20 @@
 use crate::midi::Bar;
 
 /// The embedding dimension for the initial feature-based encoder.
-pub const EMBEDDING_DIM: usize = 16;
+///
+/// Set to 64 as a compromise: small enough for RTX 4050 real-time inference,
+/// large enough for meaningful musical features beyond the 16 hand-crafted ones.
+/// The projection layer (`ProjectionLayer`) maps the 16 raw features up to 64-dim.
+pub const EMBEDDING_DIM: usize = 64;
 
-/// A 16-dimensional bar embedding.
+/// The number of raw hand-crafted features extracted per bar.
+pub const RAW_FEATURE_DIM: usize = 16;
+
+/// A 64-dimensional bar embedding (projected from 16 raw features).
 pub type Embedding = [f32; EMBEDDING_DIM];
+
+/// Raw 16-dimensional feature vector (pre-projection).
+pub type RawFeatures = [f32; RAW_FEATURE_DIM];
 
 /// Named features extracted from a single bar of MIDI.
 ///
@@ -53,8 +63,8 @@ pub struct BarFeatures {
 }
 
 impl BarFeatures {
-    /// Convert to a flat embedding array.
-    pub fn to_array(&self) -> Embedding {
+    /// Convert to a flat raw feature array (16-dim, pre-projection).
+    pub fn to_raw(&self) -> RawFeatures {
         [
             self.note_density,
             self.avg_pitch,
@@ -75,9 +85,16 @@ impl BarFeatures {
         ]
     }
 
+    /// Convert to a flat embedding array (16-dim, for backward compat).
+    /// Deprecated: use `to_raw()` + `ProjectionLayer` instead.
+    pub fn to_array(&self) -> RawFeatures {
+        self.to_raw()
+    }
+
     /// Construct from a flat slice (for testing / deserialization).
+    /// Accepts 16-element slices (raw features).
     pub fn from_slice(s: &[f32]) -> Self {
-        assert_eq!(s.len(), EMBEDDING_DIM, "embedding must be {EMBEDDING_DIM}-dim");
+        assert_eq!(s.len(), RAW_FEATURE_DIM, "raw features must be {RAW_FEATURE_DIM}-dim");
         Self {
             note_density: s[0],
             avg_pitch: s[1],
@@ -99,7 +116,8 @@ impl BarFeatures {
     }
 }
 
-/// The JEPA encoder. In v1 this is a deterministic feature extractor.
+/// The JEPA encoder. In v1 this is a deterministic feature extractor
+/// with a linear projection from 16 raw features to 64-dim embedding space.
 /// In v2+ it will be a frozen Conformer transformer (384-dim).
 pub struct JepaEncoder {
     /// Smoothing factor for exponential moving average (0-1).
@@ -107,6 +125,9 @@ pub struct JepaEncoder {
     pub smoothing_alpha: f32,
     /// Previous smoothed embedding (for temporal smoothing).
     prev_embedding: Option<Embedding>,
+    /// Projection layer: maps 16 raw features → 64-dim embedding.
+    projection: ProjectionLayer,
+}
 }
 
 impl JepaEncoder {
@@ -114,12 +135,14 @@ impl JepaEncoder {
         Self {
             smoothing_alpha: 0.12,
             prev_embedding: None,
+            projection: ProjectionLayer::new(),
         }
     }
 
-    /// Extract raw features from a single bar.
+    /// Extract raw features from a single bar and project to embedding space.
     pub fn embed_bar(&self, bar: &Bar) -> Embedding {
-        extract_features(bar).to_array()
+        let raw = extract_features(bar).to_raw();
+        self.projection.project(&raw)
     }
 
     /// Extract features with exponential temporal smoothing.
@@ -145,6 +168,71 @@ impl JepaEncoder {
     /// Reset the smoothing state (e.g., when starting a new piece).
     pub fn reset(&mut self) {
         self.prev_embedding = None;
+    }
+}
+
+/// Linear projection layer: maps 16 raw features → 64-dim embedding.
+///
+/// This is a simple fixed random projection (Johnson-Lindenstrauss-style).
+/// The projection matrix is deterministic (seeded) so all instances produce
+/// the same mapping, ensuring cross-crate compatibility with fleet-ensemble.
+///
+/// In v2+ this will be replaced by the first layers of a trained Conformer.
+pub struct ProjectionLayer {
+    /// Projection matrix: [EMBEDDING_DIM × RAW_FEATURE_DIM] (64×16).
+    /// Each output dimension is a weighted combination of the 16 raw features.
+    weights: [[f32; RAW_FEATURE_DIM]; EMBEDDING_DIM],
+    /// Bias vector (64-dim).
+    bias: [f32; EMBEDDING_DIM],
+}
+
+impl ProjectionLayer {
+    /// Create a new projection layer with a deterministic seeded initialization.
+    ///
+    /// Uses a simple LCG (linear congruential generator) for reproducibility
+    /// without requiring a `rand` dependency. Weights are initialized with
+    /// He-initialization scaled by sqrt(2/raw_dim) for variance preservation.
+    pub fn new() -> Self {
+        let scale = (2.0 / RAW_FEATURE_DIM as f32).sqrt();
+        let mut weights = [[0.0f32; RAW_FEATURE_DIM]; EMBEDDING_DIM];
+        let mut bias = [0.0f32; EMBEDDING_DIM];
+
+        // Simple LCG: seed = 42, multiplier = 1103515245, increment = 12345
+        let mut state: u32 = 42;
+        for i in 0..EMBEDDING_DIM {
+            for j in 0..RAW_FEATURE_DIM {
+                state = state.wrapping_mul(1103515245).wrapping_add(12345);
+                // Map to [-1, 1] and scale
+                let val = ((state >> 8) as f32 / 16777215.0) * 2.0 - 1.0;
+                weights[i][j] = val * scale;
+            }
+            // Small bias initialization
+            state = state.wrapping_mul(1103515245).wrapping_add(12345);
+            bias[i] = ((state >> 8) as f32 / 16777215.0) * 0.1 - 0.05;
+        }
+
+        Self { weights, bias }
+    }
+
+    /// Project a 16-dim raw feature vector to 64-dim embedding space.
+    ///
+    /// `out[i] = bias[i] + Σ_j weights[i][j] * raw[j]`
+    pub fn project(&self, raw: &RawFeatures) -> Embedding {
+        let mut out = self.bias;
+        for i in 0..EMBEDDING_DIM {
+            let mut sum = self.bias[i];
+            for j in 0..RAW_FEATURE_DIM {
+                sum += self.weights[i][j] * raw[j];
+            }
+            out[i] = sum;
+        }
+        out
+    }
+}
+
+impl Default for ProjectionLayer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -425,11 +513,12 @@ mod tests {
 
     #[test]
     fn test_embedding_dimension() {
-        assert_eq!(EMBEDDING_DIM, 16);
+        assert_eq!(EMBEDDING_DIM, 64);
+        assert_eq!(RAW_FEATURE_DIM, 16);
     }
 
     #[test]
-    fn test_to_array_from_slice_roundtrip() {
+    fn test_to_raw_from_slice_roundtrip() {
         let bar = Bar {
             notes: vec![
                 make_note(60, 0.0, 1.0, 100),
@@ -439,7 +528,7 @@ mod tests {
             tempo: 120.0,
         };
         let f = extract_features(&bar);
-        let arr = f.to_array();
+        let arr = f.to_raw();
         let f2 = BarFeatures::from_slice(&arr);
         assert_eq!(f, f2);
     }
@@ -461,18 +550,21 @@ mod tests {
         let emb1 = encoder.embed_bar_smoothed(&bar1);
         let emb2 = encoder.embed_bar_smoothed(&bar2);
 
-        // First embedding should equal the raw embedding
-        let raw1 = encoder.embed_bar(&bar1);
+        // First embedding should equal the projected raw embedding
+        let raw1 = extract_features(&bar1).to_raw();
+        let proj = ProjectionLayer::new();
+        let expected1 = proj.project(&raw1);
         for i in 0..EMBEDDING_DIM {
-            assert_approx_eq::assert_approx_eq!(emb1[i], raw1[i], 1e-6);
+            assert_approx_eq::assert_approx_eq!(emb1[i], expected1[i], 1e-5);
         }
 
-        // Second embedding should be smoothed (not equal to raw2)
-        let raw2 = encoder.embed_bar(&bar2);
+        // Second embedding should be smoothed (not equal to raw2 projection)
+        let raw2 = extract_features(&bar2).to_raw();
+        let expected2 = proj.project(&raw2);
         let a = 0.12;
         for i in 0..EMBEDDING_DIM {
-            let expected = a * raw2[i] + (1.0 - a) * raw1[i];
-            assert_approx_eq::assert_approx_eq!(emb2[i], expected, 1e-5);
+            let expected = a * expected2[i] + (1.0 - a) * expected1[i];
+            assert_approx_eq::assert_approx_eq!(emb2[i], expected, 1e-4);
         }
     }
 }

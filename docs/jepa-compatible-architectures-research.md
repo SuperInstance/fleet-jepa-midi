@@ -395,8 +395,250 @@ piano_roll = flow_decoder(z_interp)  # novel hybrid music
 
 ---
 
-## 6. Framework 4: Action-Conditioned World Models (DreamerV3 / MuZero) / MuZero)
+## 6. Framework 4: Action-Conditioned World Models (DreamerV3 / MuZero)
 
 ### How It Works
 
-DreamerV3 learns a world model using a Recurrent State-Space Model (RSS
+DreamerV3 learns a world model using a [Recurrent State-Space Model (RSSM)](https://arxiv.org/abs/1912.01603) — a [recurrent neural network](https://en.wikipedia.org/wiki/Recurrent_neural_network) that maintains a probabilistic belief over latent states. An agent can "dream" forward: imagine possible futures, evaluate them, and choose actions that lead to desirable outcomes.
+
+For music, this is transformative. The system can **rehearse the future**: given the current musical state (JEPA embedding) and a candidate parameter change (MIDI action), it imagines what the next 8 bars will feel like. If the dreamed future sounds good, execute. If not, try a different action.
+
+> *Before you play the note, hear it in your head. Before you change the rule, dream what it sounds like. This is what every great improviser does — from [Charlie Parker](https://en.wikipedia.org/wiki/Charlie_Parker) to [Keith Jarrett](https://en.wikipedia.org/wiki/Keith_Jarrett). The Dreamer architecture formalizes that inner hearing.*
+
+### RSSM: The Mathematical Core
+
+The RSSM maintains two types of latent state:
+
+$$h_t = f_\theta(h_{t-1}, s_{t-1}, a_{t-1}) \quad \text{(deterministic — GRU)}$$
+
+$$s_t \sim q_\theta(s_t | h_t, o_t) \quad \text{(stochastic posterior — during training)}$$
+
+$$s_t \sim p_\theta(s_t | h_t) \quad \text{(stochastic prior — during dreaming)}$$
+
+where:
+- $h_t$ = deterministic hidden state ([GRU](https://en.wikipedia.org/wiki/Gated_recurrent_unit) update)
+- $s_t$ = stochastic latent state (multiple possible futures)
+- $a_{t-1}$ = MIDI parameter action
+- $o_t$ = JEPA embedding observation
+
+The key insight: during training, the model has access to actual musical output (posterior $q$). During dreaming, it only uses its imagination (prior $p$). This is how the system **hallucinates musical futures** before playing them.
+
+### Musical Mapping
+
+| DreamerV3 Concept | JEPA-MIDI Equivalent | Musical Analogy |
+|---|---|---|
+| **State** $s_t$ | JEPA embedding | "What the music feels like now" |
+| **Action** $a_t$ | MIDI parameter changes | "Let me increase density" |
+| **Dynamics** $f(s_t, a_t)$ | How parameters change feel | "If I speed up, it gets more urgent" |
+| **Reward** $r_t$ | Musical quality | "Does this sound good?" |
+| **Dream** | Imagine before playing | "Hear it in your head first" |
+
+### RTX 4050 Feasibility
+
+| Component | VRAM | Notes |
+|-----------|------|-------|
+| RSSM (GRU + prior/posterior nets) | ~0.5 GB | 512-dim hidden, 384-dim latent |
+| Reward predictor | ~0.1 GB | Small MLP |
+| Actor-critic (for action selection) | ~0.2 GB | Optional — can use dreamed rewards directly |
+| Training (with observation encoder) | ~2.0 GB | Batch 32, mixed precision |
+| **Total** | **~2.8 GB** | **Fits — tight but feasible** |
+
+### Training Data
+
+- Recorded (JEPA embedding, MIDI action, reward) tuples from performances
+- ~100 hours of recorded play = ~288,000 training steps (at 1.25s/step)
+- Can bootstrap from self-play: let the system perform, record, train, repeat
+
+### Open-Source Implementations
+
+- ✅ [DreamerV3 official (TF/JAX)](https://github.com/danijar/dreamerv3) — Google Research
+- ✅ [DreamerV3 PyTorch](https://github.com/NM512/dreamerv3-torch) — community port
+- ✅ [DreamerV2](https://github.com/danijar/dreamerv2) — predecessor
+- ❌ No existing Dreamer-for-music implementation — **this is novel**
+
+### Why Not MuZero?
+
+[MuZero](https://arxiv.org/abs/1911.08265) learns a model that plans via [Monte Carlo Tree Search (MCTS)](https://en.wikipedia.org/wiki/Monte_Carlo_tree_search). It's more powerful than Dreamer for discrete action spaces (Go, Chess), but:
+1. MCTS is too slow for real-time music (needs hundreds of forward passes per decision)
+2. Our action space is continuous (parameter deltas), which MuZero handles poorly
+3. Dreamer's "dream" paradigm is more natural for music — imagine, evaluate, play
+
+**Recommendation: DreamerV3, not MuZero.**
+
+---
+
+## 7. Algorithmic Generator + JEPA Ideation
+
+### The Synthesis
+
+All four frameworks above share a common thread: they separate **perception** (JEPA encoder) from **generation** (algorithmic engine or flow decoder) and connect them through a **latent space** (embeddings). This separation is exactly what the [agentic algorithmic music system](agentic-algorithmic-music.md) needs:
+
+```
+Algorithmic Engine generates MIDI
+        │
+        ▼
+JEPA encodes the output ───► embedding ("how does it feel?")
+        │
+        ▼
+JEPA predicts next-phrase embedding ("where is it going?")
+        │
+        ▼
+LLM receives context + prediction ───► parameter adjustments
+        │
+        ▼
+Algorithmic Engine generates with new parameters
+```
+
+### What Each Framework Contributes
+
+| Framework | Contribution to the Agentic System |
+|-----------|-------------------------------------|
+| **A-JEPA (Audio)** | Pretrained audio embeddings — no need to train from scratch. Use for cross-modal alignment. |
+| **V-JEPA (Piano Rolls)** | Temporal dynamics prediction — how the "video" of a piano roll evolves over multiple bars. |
+| **Flow Matching** | Generative decoder — interpolate between algorithmic regimes (Markov → L-system morphing). |
+| **DreamerV3** | Forward planning — "dream" the musical future before committing to parameter changes. |
+
+### The Novel Combination
+
+No existing project combines all four. Our proposed architecture:
+1. **Perception:** MIDI-RAE-JEPA's Swin V2 encoder (already proven on piano rolls)
+2. **Prediction:** Music-JEPA's action-conditioned dynamics (audio state, MIDI action)
+3. **Generation:** Algorithmic engines (Markov, L-system, fractal, CA) — not flow matching
+4. **Planning:** DreamerV3-style RSSM on top of JEPA embeddings
+5. **Self-improvement:** [Curiosity + adversarial masking + Cross-JEPA](self-improving-harnesses.md)
+
+This is the architectural contribution of fleet-jepa-midi: not a new algorithm, but a novel **combination** of existing algorithms across the three timescales of music.
+
+---
+
+## 8. Feasibility Assessment Matrix
+
+| Framework | VRAM (6GB Budget) | Implementation Effort | Music Quality | Real-Time Capable | Novelty |
+|-----------|-------------------|----------------------|---------------|-------------------|--------|
+| **A-JEPA** | ✅ 1.2 GB (ViT-S) | Low (pretrained) | Good (audio-level) | ✅ Yes | Low (exists) |
+| **V-JEPA (Piano Roll)** | ✅ 1.5 GB | Medium (adapt V-JEPA) | Very Good | ✅ Yes | **High** (novel application) |
+| **Flow Matching** | ✅ 2.0 GB | Medium (adapt MIDI-RAE) | Excellent | ✅ Yes (10 Euler steps) | Medium |
+| **DreamerV3** | ⚠️ 2.8 GB (tight) | **High** (RSSM + reward) | Unknown (novel) | ✅ Yes (dreams fast) | **Very High** (novel) |
+| **Hybrid (Recommended)** | ✅ 2.6 GB | **High** | **Excellent** | ✅ Yes | **Very High** |
+
+---
+
+## 9. Recommended Architecture
+
+### Phase 1 (Baseline): Token-Based JEPA
+
+Start with the architecture in the [training design doc](jepa-training-design.md):
+- 4-layer [Conformer](https://arxiv.org/abs/2005.08100) encoder, 384 dim, 18.7M params
+- Fixed future-block masking on 64-token windows (vocab 141)
+- [BYOL-style](https://arxiv.org/abs/2006.07733) anti-collapse (EMA + stop-grad + VICReg)
+- L1 loss on normalized embeddings
+
+**Why start here:** Simplest to implement. Smallest model. Fastest to train. Already fits RTX 4050 with 47% VRAM margin.
+
+### Phase 2 (Enhanced): Add Piano Roll View
+
+Add a parallel piano-roll encoder inspired by [MIDI-RAE-JEPA](https://github.com/drscotthawley/midi-rae):
+- [Swin Transformer V2](https://arxiv.org/abs/2111.09883) on 128×128 piano roll images
+- Pitch/time equivariance loss
+- Fuse with token-based encoder via concatenation + projection
+
+**Why add this:** Piano roll view captures spatial (pitch × time) structure that token sequences miss. The fusion of token + visual views creates richer embeddings.
+
+### Phase 3 (Generative): Add Flow-Matching Decoder
+
+Add a [flow-matching](https://arxiv.org/abs/2210.02747) generative decoder:
+- Condition on algorithmic parameters (engine type, params, musical constraints)
+- Enables interpolation between algorithmic regimes
+- Uses frozen Phase 2 encoder embeddings as target distribution
+
+**Why add this:** Flow matching enables **novelty generation** — music that exists between known algorithmic territories. A Markov-L-system hybrid that sounds like neither parent.
+
+### Phase 4 (Planning): Add Dreamer World Model
+
+Add the [DreamerV3](https://arxiv.org/abs/2301.04104) RSSM on top of the JEPA embedding space:
+- State = JEPA embedding (from Phase 2)
+- Action = MIDI parameter deltas (from the [engine parameter space](agentic-algorithmic-music.md#appendix-a-quick-reference--engine-parameter-cheat-sheet))
+- Reward = musical quality (coherence + curiosity + cross-modal alignment)
+
+**Why add this:** The system can now **rehearse the future** — dream parameter changes, evaluate their predicted effect, and choose the best one before playing a single note. See [Self-Improving Harnesses](self-improving-harnesses.md#4-architecture-3-latent-action-world-modeling-dreamer) for full details.
+
+### Architecture Evolution
+
+```
+Phase 1: Token JEPA (baseline)
+┌───────────────────┐
+│ 4-layer Conformer │  18.7M params, 2.6GB VRAM
+│ Fixed masking     │  L1 loss + VICReg
+└───────────────────┘
+
+Phase 2: + Piano Roll View
+┌───────────────────┐    ┌───────────────────┐
+│ 4-layer Conformer │    │ Swin V2 Encoder   │  +25M params, +0.8GB
+│ (token view)      │──►│ (piano roll view) │  Equivariance loss
+└───────────────────┘    └─────────┬─────────┘
+                                   │
+                         ┌─────────▼─────────┐
+                         │ Fusion Projection │  384-dim output
+                         └───────────────────┘
+
+Phase 3: + Flow Matching Decoder
+┌───────────────────┐    ┌───────────────────┐
+│ Phase 2 Encoder   │──►│ Flow Decoder      │  +15M params, +0.5GB
+│ (frozen)          │    │ (generative)      │  Enables interpolation
+└───────────────────┘    └───────────────────┘
+
+Phase 4: + Dreamer Planner
+┌───────────────────┐    ┌───────────────────┐
+│ Phase 2 Encoder   │──►│ RSSM World Model  │  +8M params, +0.5GB
+│ (frozen)          │    │ (dreams futures)  │  Plans before playing
+└───────────────────┘    └───────────────────┘
+
+Total Phase 4: ~67M params, ~4.4GB VRAM — fits RTX 4050 with 27% margin
+```
+
+---
+
+## 10. References
+
+### JEPA Core
+
+| Paper | Year | Link | Why It Matters |
+|-------|------|------|----------------|
+| I-JEPA (Assran et al.) | 2023 | [arXiv:2301.08243](https://arxiv.org/abs/2301.08243) | The foundational JEPA paper |
+| V-JEPA (Bardes et al.) | 2024 | [arXiv:2403.02537](https://arxiv.org/abs/2403.02537) | Video JEPA — temporal masking strategies |
+| V-JEPA 2 | 2025 | [ai.meta.com](https://ai.meta.com/blog/vjepa-2/) | Action-conditioned prediction |
+| A Path Towards Autonomous Machine Intelligence (LeCun) | 2022 | [openreview.net](https://openreview.net/forum?id=BZ5a1r-kVsf) | LeCun's vision paper |
+
+### Music + JEPA
+
+| Paper | Year | Link | Why It Matters |
+|-------|------|------|----------------|
+| MIDI-RAE-JEPA (Hawley) | 2026 | [arXiv:2607.14537](https://arxiv.org/abs/2607.14537) | Swin V2 + flow matching on piano rolls. **Most directly relevant.** |
+| Music-JEPA (Wang, Fang, LeCun) | 2026 | [arXiv:2607.22000](https://arxiv.org/abs/2607.22000) | Action-conditioned world model. **Co-authored by LeCun.** |
+| Audio-JEPA (Tuncay et al.) | 2025 | [arXiv:2507.02915](https://arxiv.org/abs/2507.02915) | Open code, pretrained checkpoint. Best starting point for audio. |
+| A-JEPA (Fei et al.) | 2023 | [arXiv:2311.15830](https://arxiv.org/abs/2311.15830) | Curriculum time-frequency masking. |
+| Stem-JEPA (Sony CSL) | 2024 | [github.com/SonyCSLParis](https://github.com/SonyCSLParis/Stem-JEPA) | Multi-track stem compatibility. |
+
+### Architecture & Training
+
+| Paper | Year | Link | Why It Matters |
+|-------|------|------|----------------|
+| [Conformer](https://arxiv.org/abs/2005.08100) (Gulati et al.) | 2020 | arXiv:2005.08100 | CNN + attention hybrid for audio/music |
+| [Swin Transformer V2](https://arxiv.org/abs/2111.09883) | 2022 | arXiv:2111.09883 | Hierarchical vision transformer |
+| [DreamerV3](https://arxiv.org/abs/2301.04104) (Hafner et al.) | 2023 | arXiv:2301.04104 | World models that dream |
+| [Flow Matching](https://arxiv.org/abs/2210.02747) (Lipman et al.) | 2023 | arXiv:2210.02747 | Generative via ODE transport |
+| [FlashAttention-2](https://arxiv.org/abs/2307.08691) | 2023 | arXiv:2307.08691 | Memory-efficient attention |
+
+### Self-Supervised Learning Foundations
+
+| Paper | Year | Link | Why It Matters |
+|-------|------|------|----------------|
+| [BYOL](https://arxiv.org/abs/2006.07733) | 2020 | arXiv:2006.07733 | EMA + predictor (no negatives needed) |
+| [SimSiam](https://arxiv.org/abs/2011.10566) | 2020 | arXiv:2011.10566 | Stop-gradient prevents collapse |
+| [VICReg](https://arxiv.org/abs/2105.04906) | 2022 | arXiv:2105.04906 | Variance + invariance + covariance |
+| [DINOv2](https://arxiv.org/abs/2304.07193) | 2023 | arXiv:2304.07193 | Self-supervised vision — EMA teacher template |
+
+---
+
+*Research report version: 2.0 | Project: fleet-jepa-midi | Date: 2026-08-13*  
+*Expanded with ideation from ByteDance Seed-2.0-pro, NousResearch Hermes-3-Llama-405B, Qwen3-Coder-480B, and NVIDIA Nemotron-3-Ultra via DeepInfra.*
