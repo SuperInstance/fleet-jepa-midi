@@ -8,18 +8,19 @@ use super::embedding::{Embedding, EMBEDDING_DIM};
 /// A simple linear predictor for next-bar embedding.
 ///
 /// Predicts: emb_{t+1} = W @ emb_t + b
-/// where W is a EMBEDDING_DIM × EMBEDDING_DIM matrix.
+/// where W is a EMBEDDING_DIM × EMBEDDING_DIM matrix (64×64).
 pub struct LinearPredictor {
     /// Weight matrix (row-major, EMBEDDING_DIM × EMBEDDING_DIM).
-    weights: [[f32; EMBEDDING_DIM]; EMBEDDING_DIM],
+    weights: Box<[[f32; EMBEDDING_DIM]; EMBEDDING_DIM]>,
     /// Bias vector.
     bias: [f32; EMBEDDING_DIM],
+}
 }
 
 impl LinearPredictor {
     /// Create a predictor initialized to identity (predicts "same as current").
     pub fn new() -> Self {
-        let mut weights = [[0.0f32; EMBEDDING_DIM]; EMBEDDING_DIM];
+        let mut weights = Box::new([[0.0f32; EMBEDDING_DIM]; EMBEDDING_DIM]);
         for i in 0..EMBEDDING_DIM {
             weights[i][i] = 1.0;
         }
@@ -27,6 +28,7 @@ impl LinearPredictor {
             weights,
             bias: [0.0; EMBEDDING_DIM],
         }
+    }
     }
 
     /// Predict the next-bar embedding from the current embedding.
