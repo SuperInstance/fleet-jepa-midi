@@ -16,6 +16,7 @@ pub struct FractalGenerator {
     /// Center of the Mandelbrot exploration (imaginary axis).
     cy: f64,
     /// Scale of the exploration window.
+    #[allow(dead_code)]
     scale: f64,
 }
 

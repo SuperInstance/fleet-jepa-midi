@@ -47,7 +47,7 @@ impl Default for Bar {
 pub fn smf_to_bars(smf: &Smf) -> Vec<Bar> {
     let ppq = match smf.header.timing {
         Timing::Metrical(ppq) => ppq.as_int() as f32,
-        Timing::FPS(_, _) => 480.0, // fallback
+        Timing::Timecode(_, _) => 480.0, // fallback for SMPTE timecode
     };
     let beats_per_bar = 4u32; // assume 4/4
 
@@ -151,7 +151,7 @@ pub fn smf_to_bars(smf: &Smf) -> Vec<Bar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midly::{Header, Format, Timing, Smf, Track, TrackEvent, TrackEventKind, MidiMessage, Ticks};
+    use midly::{Header, Format, Timing, Smf, Track, TrackEvent, TrackEventKind, MidiMessage, num::{u4, u7, u15, u28}};
 
     #[test]
     fn test_bar_default() {
@@ -163,40 +163,39 @@ mod tests {
 
     #[test]
     fn test_smf_to_bars() {
-        // Build a minimal SMF with 4 quarter notes
-        let header = Header::new(Format::SingleTrack, Timing::Metrical(Ticks(480)));
+        let header = Header::new(Format::SingleTrack, Timing::Metrical(u15::from(480)));
         let mut track = Track::new();
 
         // Note on C4 at beat 0
-        track.push(TrackEvent { delta: Ticks(0), kind: TrackEventKind::Midi {
-            channel: midly::num::u4::from(0),
+        track.push(TrackEvent { delta: u28::from(0), kind: TrackEventKind::Midi {
+            channel: u4::from(0),
             message: MidiMessage::NoteOn {
-                key: midly::num::u7::from(60),
-                vel: midly::num::u7::from(100),
+                key: u7::from(60),
+                vel: u7::from(100),
             }
         }});
         // Note off C4 at beat 1 (480 ticks)
-        track.push(TrackEvent { delta: Ticks(480), kind: TrackEventKind::Midi {
-            channel: midly::num::u4::from(0),
+        track.push(TrackEvent { delta: u28::from(480), kind: TrackEventKind::Midi {
+            channel: u4::from(0),
             message: MidiMessage::NoteOff {
-                key: midly::num::u7::from(60),
-                vel: midly::num::u7::from(0),
+                key: u7::from(60),
+                vel: u7::from(0),
             }
         }});
         // Note on E4 at beat 1
-        track.push(TrackEvent { delta: Ticks(0), kind: TrackEventKind::Midi {
-            channel: midly::num::u4::from(0),
+        track.push(TrackEvent { delta: u28::from(0), kind: TrackEventKind::Midi {
+            channel: u4::from(0),
             message: MidiMessage::NoteOn {
-                key: midly::num::u7::from(64),
-                vel: midly::num::u7::from(90),
+                key: u7::from(64),
+                vel: u7::from(90),
             }
         }});
         // Note off E4 at beat 2
-        track.push(TrackEvent { delta: Ticks(480), kind: TrackEventKind::Midi {
-            channel: midly::num::u4::from(0),
+        track.push(TrackEvent { delta: u28::from(480), kind: TrackEventKind::Midi {
+            channel: u4::from(0),
             message: MidiMessage::NoteOff {
-                key: midly::num::u7::from(64),
-                vel: midly::num::u7::from(0),
+                key: u7::from(64),
+                vel: u7::from(0),
             }
         }});
 

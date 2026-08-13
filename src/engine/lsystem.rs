@@ -122,6 +122,12 @@ pub struct LSystemEngine {
     lsystem: LSystem,
 }
 
+impl Default for LSystemEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LSystemEngine {
     pub fn new() -> Self {
         Self { lsystem: LSystem::new() }

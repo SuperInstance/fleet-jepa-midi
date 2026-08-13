@@ -59,8 +59,8 @@ impl MarkovChain {
         let mut result = vec![self.base_pitch];
 
         // Pick a starting interval pair from known transitions
-        let mut prev_interval = 2i32; // whole step up
-        let mut curr_interval = -1i32; // half step down
+        let mut prev_interval;
+        let mut curr_interval;
 
         // Try to find a real starting state
         if let Some(key) = self.transitions.keys().next() {
@@ -121,6 +121,12 @@ pub struct MarkovEngine {
     chain: MarkovChain,
 }
 
+impl Default for MarkovEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MarkovEngine {
     pub fn new() -> Self {
         let mut chain = MarkovChain::new();
@@ -150,7 +156,7 @@ impl AlgorithmicEngine for MarkovEngine {
                 pitch,
                 start_beat,
                 duration_beats: 0.5,
-                velocity: 80 + (i % 3) * 10,
+                velocity: (80 + (i % 3) * 10) as u8,
             });
         }
 

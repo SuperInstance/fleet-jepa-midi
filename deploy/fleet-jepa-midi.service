@@ -1,0 +1,26 @@
+[Unit]
+Description=Fleet JEPA-MIDI — Three-layer real-time music intelligence
+Documentation=https://github.com/SuperInstance/fleet-jepa-midi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eileen
+WorkingDirectory=/home/eileen/projects/fleet-jepa-midi
+ExecStart=/home/eileen/projects/fleet-jepa-midi/target/release/fleet-jepa-midi run --gateway http://localhost:3000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=150%
+
+# Environment
+Environment=RUST_LOG=info
+Environment=JEPA_MIDI_GATEWAY=http://localhost:3000
+
+[Install]
+WantedBy=multi-user.target

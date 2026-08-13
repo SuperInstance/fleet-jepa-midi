@@ -74,7 +74,7 @@ impl AlgorithmicEngine for CaEngine {
 
     fn generate(&self, bars: usize, _tempo: f32) -> NoteSeq {
         let steps_per_bar = 16; // 16th notes
-        let total_steps = bars * steps_per_bar;
+        let _total_steps = bars * steps_per_bar;
         let width = steps_per_bar;
 
         let mut ca = CellularAutomaton::new(width, self.rule);
@@ -88,7 +88,7 @@ impl AlgorithmicEngine for CaEngine {
                     // Vary pitch based on step position in a pentatonic scale
                     let scale = [60, 62, 64, 67, 69, 72, 74, 76]; // C pentatonic + octave
                     let pitch = scale[step % scale.len()];
-                    let velocity = 60 + (step % 4) * 15;
+                    let velocity: u8 = (60 + (step % 4) * 15) as u8;
                     notes.push(MidiNote {
                         pitch,
                         start_beat: beat,
