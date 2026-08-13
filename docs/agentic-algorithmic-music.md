@@ -554,7 +554,13 @@ Fractal music exploits self-similarity across time scales: patterns at the bar l
 
 Research shows that music with fractal dimension near 1.5 (Brownian-like) is perceived as most natural and engaging. The power spectral density of enjoyable music follows S(f) ∝ 1/f^α where α ≈ 1 ("pink noise" or "1/f noise").
 
+> **⚠️ Caveat (math review Aug 2026):** The claim that "D ≈ 1.5 is most natural" is folk wisdom derived from the 1/f noise literature, not independently established. The value D = 1.5 follows from α = 1 via D = 2 − α/2, but this is the spectral exponent of pitch *fluctuations*, not the dimension of musical structure. Perceptual studies are mixed: Pressnitzer & McAdams (1999) found listeners don't reliably prefer 1/f over other correlations. This claim should be treated as a heuristic, not established fact. See Voss & Clarke (1975, 1978); Krumhansl (2000) for alternative models of pitch structure.
+>
+> Additionally, the term "Hausdorff dimension" as used below is a *heuristic complexity parameter*, not the mathematical Hausdorff dimension. A finite melody (discrete points) has Hausdorff dimension 0. The graph of a continuous interpolation has dimension 1 (piecewise linear). The parameter D below is better understood as derived from the Hurst exponent H via D = 2 − H, where H directly controls fBm roughness. Consider using H as the primary control parameter for mathematical honesty.
+
 ### 4.1 Hausdorff Dimension as a Continuous Musical Parameter
+
+> **Caveat (math review Aug 2026):** "Hausdorff dimension" is a misnomer here. The Hausdorff dimension of a finite melody (discrete points) is 0. The parameter D below is better described as a complexity parameter derived from the Hurst exponent (D = 2 − H for fBm graphs). We retain the term for continuity with the 1/f noise literature, but mathematically, H is the honest control parameter.
 
 The Hausdorff dimension D quantifies the roughness/fractal complexity of a musical surface. We map D ∈ [1.0, 2.0] as a continuous, LLM-modulatable parameter:
 
