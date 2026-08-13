@@ -99,9 +99,21 @@ The loop runs at the pulse rate. The LLM runs at the phrasing rate. The algorith
 - **TapScript**: the notation system this instrument speaks
 - **CNS escalation pattern**: same three-tier architecture (reflex → trained → reasoned)
 
+## Two Complementary Flows
+
+This repo and [fleet-ensemble](https://github.com/SuperInstance/fleet-ensemble) are companion systems:
+
+1. **JEPA-MIDI (this repo)** — **Construction**: sound → JEPA perceives feel → LLM thinks in phrasing → algorithms execute → MIDI emerges. Building music FROM feel.
+
+2. **Fleet Ensemble** — **Performance**: MIDI score → performer agents render it with intelligence → JEPA director shapes the feel → output is more than notes, it's a *performance*. Rendering MIDI AS more than notes on a page.
+
+Both are modular and agnostic. The JEPA, the performer, the rendering system — all pluggable. The magic is in the synergy: a higher-level intelligence deciding the *manner* of playing.
+
 ## Status
 
 **Concept phase.** Repo created Aug 13, 2026. Design in progress.
+
+Also see the [infrastructure redesign](https://github.com/SuperInstance/AI-Writings/tree/main/infrastructure) for how this fits the broader fleet architecture.
 
 ## License
 
