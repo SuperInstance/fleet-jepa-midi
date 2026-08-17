@@ -1,0 +1,26 @@
+{
+  "n_rooms": 4,
+  "n_clips": 59,
+  "room_discrimination_plain": 0.3389830508474576,
+  "room_discrimination_speaker_heldout": 0.3559322033898305,
+  "chance": 0.25,
+  "separability": {
+    "same_room_mean": 0.6290456652641296,
+    "cross_room_mean": 0.6144319772720337,
+    "gap": 0.014613687992095947,
+    "n_same": 464,
+    "n_cross": 1247
+  },
+  "room_temperature": {
+    "episode-1": 0.41839566826820374,
+    "episode-2": 0.37601083517074585,
+    "episode-3": 0.3278568387031555,
+    "episode-4": 0.3745204508304596
+  },
+  "rooms": {
+    "episode-1": 14,
+    "episode-2": 15,
+    "episode-3": 15,
+    "episode-4": 15
+  }
+}
