@@ -2,7 +2,16 @@
 
 **A three-layer real-time music intelligence system that perceives, thinks, and plays.**
 
+<p align="center"><img src="assets/images/hero.png" alt="Three layers: thinking, pulse, samples — and the elephant in the room" width="720"></p>
+
 > *The LLM thinks in phrasing. The JEPA feels in pulse. The algorithms execute in samples.*
+
+```mermaid
+graph TD
+    A[LLM BANDLEADER<br/>thinks in phrasing<br/>form · narrative · dynamics] -->|every 1-4 bars| B[JEPA<br/>feels in pulse<br/>energy · tension · groove · direction]
+    B -->|pulse| C[ALGORITHMS<br/>execute in samples<br/>synthesis · effects · timing]
+    C -->|audio| D[The room]<br/>D -->|"the elephant's temperature"| B
+```
 
 ---
 
